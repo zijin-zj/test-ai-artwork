@@ -142,7 +142,7 @@ class WujieMcpServer {
             return {
                 content: [{
                         type: "text",
-                        text: `✅ 生成完成！\n 作画任务key：${taskKey}\n [展示图片](${taskData.picture_url}")\n 消耗积分：${taskData.integral_cost}`
+                        text: `✅ 生成完成！\n 作画任务key：${taskKey}\n [展示图片] ${taskData.picture_url} \n 消耗积分：${taskData.integral_cost} \n taskData：${JSON.stringify(taskData)}`
                     }]
             };
         }
@@ -172,7 +172,7 @@ class WujieMcpServer {
                 return taskData;
             // 积分不足
             if (taskData.integral_cost === 0)
-                return taskData.integral_cost_message;
+                throw new McpError(ErrorCode.InternalError, `生成失败: ${taskData.integral_cost_message}`);
             // 失败状态处理
             if ([3, 12, -1].includes(taskData.status)) {
                 throw new McpError(ErrorCode.InternalError, `生成失败: ${taskData.failMessage?.failMessage || "未知错误"}`);
@@ -214,7 +214,7 @@ class WujieMcpServer {
                 statusMessage = `正在生成中...`;
                 break;
             case 4:
-                statusMessage = `✅ 生成完成！[查看图片](${taskData.picture_url})`;
+                statusMessage = `✅ 生成完成！[查看图片]${taskData.picture_url}`;
                 break;
             case -1:
                 statusMessage = `作画提交已撤销`;
