@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { ListResourcesRequestSchema, ReadResourceRequestSchema, ListToolsRequestSchema, CallToolRequestSchema, ErrorCode, McpError, TextContent } from "@modelcontextprotocol/sdk/types.js";
-import axios, { formToJSON,AxiosResponse } from "axios";
+import { ListToolsRequestSchema, CallToolRequestSchema, ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
+import axios, { AxiosResponse } from "axios";
 import dotenv from "dotenv";
-import { isJsonLike } from "redoc";
+import { ApiResponse, GenerateImageResult, GenerateTaskInfo, ModelListResponse, ModelInfo } from "./types.js";
 
 dotenv.config();
 
@@ -18,28 +18,37 @@ function getApiKey() {
 }
 
 // 无界AI配置
-const WUJIE_API_CONFIG = {
+const WUJIEAI_API_CONFIG = {
     BASE_URL: 'https://pref-gate.wujieai.com',
     ENDPOINTS: {
         CREATE_TASK: '/wj-open/v2/ai/create',
-        QUERY_TASK: '/wj-open/v2/ai/info'
+        QUERY_TASK: '/wj-open/v2/ai/info',
+        QUERY_MODEL_LIST: '/wj-open/v2/ai/model_base_infos'
     },
     API_KEY: getApiKey(),
     DEFAULT_PARAMS: {
-        model: 1013,            // 默认通用FLUX模型
-        num: 1,                 // 生成数量
-        init_image_url: ""      // 底图URL
+        model: 1013,                // 模型code，默认通用FLUX模型
+        num: 1,                     // 生成数量
+        width: 512,                 // 图片宽
+        height: 512,                // 图片高
+        uc_prompt: "",              // 负面描述词
+        init_image_url: "",         // 底图url
+        super_size_multiple: 1.0,   // 图片超分倍数，默认不超分，可传小数，取值范围为[1-4]。
+        steps: 20,                  // 采样步数（sampling steps），默认20
+        cfg: 7,                     // 提示词相关性（CFG scale），取值范围[1-30]，默认值7。
+        sampler_index: 0,           // 采样模式（Sampler）是指扩散去噪算法的采样模式，如果设置正确，它们会发散并最终收敛。
+        seed: -1                    // 随机种子，生成图片的seed，默认-1随机生成。
     }
 };
 
 
-class WujieMcpServer {
+class WujieAiMcpServer {
     server;
-    wujieAxios;
+    wujieaiAxios;
 
     constructor() {
         this.server = new Server({
-            name: "wujie-ai-server",
+            name: "wujie-ai-mcp-server",
             version: "1.0.0"
         }, {
             capabilities: {
@@ -47,10 +56,10 @@ class WujieMcpServer {
             }
         });
 
-        this.wujieAxios = axios.create({
-            baseURL: WUJIE_API_CONFIG.BASE_URL,
+        this.wujieaiAxios = axios.create({
+            baseURL: WUJIEAI_API_CONFIG.BASE_URL,
             headers: {
-                'Authorization': `Bearer ${WUJIE_API_CONFIG.API_KEY}`,
+                'Authorization': `Bearer ${WUJIEAI_API_CONFIG.API_KEY}`,
                 'Content-Type': 'application/json'
             }
         });
@@ -63,29 +72,31 @@ class WujieMcpServer {
         // 工具列表
         this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
             tools: [
-                this.createArtworkTool(),
-                this.queryArtworkTool()
+                this.generateImageTool(),
+                this.queryGenerateTaskTool(),
+                this.queryModelInfoListTool()
             ]
         }));
 
         // 工具处理器
         this.server.setRequestHandler(CallToolRequestSchema, async (req) => {
             switch (req.params.name) {
-                case 'create_artwork':
-                    return this.handleCreateArtwork(req);
-                case 'query_artwork':
-                    return this.handleQueryArtwork(req);
+                case 'generate_image':
+                    return this.handleGenerateImage(req);
+                case 'query_generate_task':
+                    return this.handleQueryGenerateTask(req);
+                case 'query_model_infos':
+                    return this.handleQueryModelInfos(req);
                 default:
                     throw new McpError(ErrorCode.MethodNotFound, `未知工具: ${req.params.name}`);
             }
         });
     }
 
-    // 创建作画工具定义
-    private createArtworkTool() {
+    private generateImageTool() {
         return {
-            name: "create_artwork",
-            description: "发起AI作画 (生成图片服务)",
+            name: "generate_image",
+            description: "AI生成图片",
             inputSchema: {
                 type: "object",
                 properties: {
@@ -94,9 +105,18 @@ class WujieMcpServer {
                         description: "模型code，默认通用FLUX模型",
                         default: 1018
                     },
+                    num: {
+                        type: "number",
+                        description: "生成数量，默认1张",
+                        default: 1
+                    },
                     prompt: {
                         type: "string",
                         description: "作画描述，建议包含风格和细节"
+                    },
+                    uc_prompt: {
+                        type: "string",
+                        description: "作画负面描述。（可选）"
                     },
                     width: {
                         type: "number",
@@ -110,20 +130,45 @@ class WujieMcpServer {
                         default: 512,
                         description: "图片高，默认512。（可选）",
                     },
-                    uc_prompt: {
+                    init_image_url: {
                         type: "string",
-                        description: "作画负面描述。（可选）"
-                    }
+                        default: "",
+                        description: "底图url。（可选）"
+                    },
+                    super_size_multiple: {
+                        type: "number",
+                        default: 1.0,
+                        description: "图片超分倍数，默认不超分。（可选）"
+                    },
+                    steps: {
+                        type: "number",
+                        default: 20,
+                        description: "采样步数，默认20。（可选）"
+                    },
+                    cfg: {
+                        type: "number",
+                        default: 7,
+                        description: "提示词相关性，取值范围[1-30]，默认值7。（可选）"
+                    },
+                    sampler_index: {
+                        type: "number",
+                        default: 20,
+                        description: "采样模式是指扩散去噪算法的采样模式。（可选）"
+                    },
+                    seed: {
+                        type: "string",
+                        default: "-1",
+                        description: "随机种子，生成图片的seed，默认-1随机生成。（可选）"
+                    },
                 },
                 required: ["prompt"]
             }
         };
     }
 
-    // 查询作画工具定义
-    private queryArtworkTool() {
+    private queryGenerateTaskTool() {
         return {
-            name: "query_artwork",
+            name: "query_generate_task",
             description: "查询作画任务结果",
             inputSchema: {
                 type: "object",
@@ -138,18 +183,36 @@ class WujieMcpServer {
         };
     }
 
-    // 处理创建请求
-    private async handleCreateArtwork(request: any) {
+    private queryModelInfoListTool() {
+        return {
+            name: "query_model_infos",
+            description: "查询模型信息列表",
+            inputSchema: {
+                type: "object",
+                properties: {}
+            }
+        }
+    }
+
+    private async handleGenerateImage(request: any) {
         const params = request.params.arguments;
-        
-        // 调用无界创建接口
-        console.log("API_KEY=" + WUJIE_API_CONFIG.API_KEY)
-        const response = await this.wujieAxios.post(WUJIE_API_CONFIG.ENDPOINTS.CREATE_TASK, {
+
+        const defaultParams = WUJIEAI_API_CONFIG.DEFAULT_PARAMS;
+
+        // 调用发起作画接口
+        const response = await this.wujieaiAxios.post(WUJIEAI_API_CONFIG.ENDPOINTS.CREATE_TASK, {
+            model: params.model || defaultParams.model,
             prompt: params.prompt,
-            width: params.width || 512,
-            height: params.height || 512,
-            ...WUJIE_API_CONFIG.DEFAULT_PARAMS
-        });
+            uc_prompt: params.uc_prompt,
+            num: params.num || defaultParams.num,
+            width: params.width || defaultParams.width,
+            height: params.height || defaultParams.height,
+            init_image_url: params.init_image_url || defaultParams.init_image_url,
+            super_size_multiple: params.super_size_multiple || defaultParams.super_size_multiple,
+            steps: params.steps || defaultParams.steps,
+            sampler_index: params.sampler_index || defaultParams.sampler_index,
+            seed: params.seed || defaultParams.seed
+        }) as AxiosResponse<ApiResponse<GenerateImageResult>>;
 
         const code = response.data.code
         if (code != 200) {
@@ -162,7 +225,6 @@ class WujieMcpServer {
 
         let taskData;
         const expectedSeconds = response.data.data.results[0].expected_second || 20;
-        
         try {
             // 轮询任务状态
             const taskData = await this.pollTaskStatus(taskKey, expectedSeconds * 1500);
@@ -171,7 +233,7 @@ class WujieMcpServer {
             return {
                 content: [{
                     type: "text",
-                    text: `✅ 生成完成！\n 作画任务key：${taskKey}\n [展示图片] ${taskData.picture_url} \n 消耗积分：${taskData.integral_cost}`
+                    text: `✅ 作画成功！\n 作画任务key：${taskKey}\n 展示图片： ${taskData.picture_url} \n 消耗积分：${taskData.integral_cost}个`
                 }]
             }
         } catch (error) {
@@ -194,8 +256,8 @@ class WujieMcpServer {
         while (Date.now() - startTime < timeout) {
             await new Promise(resolve => setTimeout(resolve, 2000));
             
-            // 发送查询请求
-            const result = await this.doQueryArtwork(taskKey);
+            // 调用查询作画结果接口
+            const result = await this.doQueryGenerateTask(taskKey) as AxiosResponse<ApiResponse<GenerateTaskInfo>>;
 
             taskData = result.data.data;
 
@@ -205,12 +267,12 @@ class WujieMcpServer {
             // 积分不足
             if (taskData.integral_cost === 0) 
                 throw new McpError(ErrorCode.InternalError,
-                    `生成失败: ${taskData.integral_cost_message}`);
+                    `作画失败: ${taskData.integral_cost_message}`);
 
             // 失败状态处理
             if ([3, 12, -1].includes(taskData.status)) {
                 throw new McpError(ErrorCode.InternalError,
-                    `生成失败: ${taskData.failMessage?.failMessage || "未知错误"}`);
+                    `作画失败: ${taskData.fail_message?.fail_message || "未知错误"}`);
             }
         }
 
@@ -220,32 +282,31 @@ class WujieMcpServer {
     }
 
 
-    private doQueryArtwork(taskKey: string) : Promise<AxiosResponse>{
-        return this.wujieAxios.get(`${WUJIE_API_CONFIG.ENDPOINTS.QUERY_TASK}?key=${taskKey}`)
-            .then(queryResponse => {
-                if (queryResponse.data.code !== "200") {
+    private doQueryGenerateTask(taskKey: string) : Promise<AxiosResponse>{
+        return this.wujieaiAxios.get(`${WUJIEAI_API_CONFIG.ENDPOINTS.QUERY_TASK}?key=${taskKey}`)
+            .then(response => {
+                if (response.data.code !== "200") {
                     throw new McpError(
                     ErrorCode.InternalError,
-                    `查询作画结果失败：${JSON.stringify(queryResponse.data)}`
+                    `查询作画结果失败：${JSON.stringify(response.data)}`
                     );
                 }
-                return queryResponse;
+                return response;
             })
             .catch(error => {
                 throw error; 
             });
     }
 
-    // 处理查询请求
-    private async handleQueryArtwork(request: any) {
+    private async handleQueryGenerateTask(request: any) {
         const argument = request.params.arguments;
 
         if (argument === undefined) {
             throw new McpError(ErrorCode.InvalidParams, "查询任务key不能为空");
         }
 
-        // 调用查询接口
-        const response = await this.doQueryArtwork(argument.key);
+        // 调用查询作画详情接口
+        const response = await this.doQueryGenerateTask(argument.key) as AxiosResponse<ApiResponse<GenerateTaskInfo>>;
 
         const taskData = response.data.data;
         
@@ -261,13 +322,13 @@ class WujieMcpServer {
                 statusMessage = `正在生成中...`;
                 break;
             case 4:
-                statusMessage = `✅ 生成完成！[查看图片]${taskData.picture_url}`;
+                statusMessage = `✅ 作画成功！查看图片：${taskData.picture_url}`;
                 break;
             case -1:
                 statusMessage = `作画提交已撤销`;
             case 3:
             case 12:
-                statusMessage = `❌ 生成失败：${taskData.failMessage.failMessage || '未知错误'}`;
+                statusMessage = `❌ 作画失败：${taskData.fail_message.fail_message || '未知错误'}`;
                 break;
             default:
                 statusMessage = "未知状态";
@@ -276,9 +337,38 @@ class WujieMcpServer {
         return {
             content: [{
                 type: "text",
-                text: `作画任务状态：${statusMessage}\n消耗积分：${taskData.integral_cost}`
+                text: `作画任务状态：${statusMessage}\n消耗积分：${taskData.integral_cost}个`
             }]
         };
+    }
+
+    private async handleQueryModelInfos(request: any) {
+        const response = await this.doQueryModelInfos(request) as AxiosResponse<ApiResponse<ModelListResponse>>;;
+        const code = response.data.code
+        if (code != 200) {
+            throw new McpError(ErrorCode.InternalError, "查询模型列表失败：" + response.data.message);
+        }
+        return {
+            content: response.data.data.data.map((model: ModelInfo) => ({
+                model_code: model.model_code,
+                model_desc: model.model_desc
+            }))
+        }
+    }
+
+    private async doQueryModelInfos(request: any): Promise<AxiosResponse>{
+        return this.wujieaiAxios.get(`${WUJIEAI_API_CONFIG.ENDPOINTS.QUERY_MODEL_LIST}`)
+            .then(response => {
+                if (response.data.code !== "200") {
+                    throw new McpError(ErrorCode.InternalError,
+                        `查询模型列表失败：${JSON.stringify(response.data)}`
+                    );
+                }
+                return response;
+            })
+            .catch(error => {
+                throw error; 
+            });
     }
 
     // 错误处理（与示例保持相同结构）
@@ -300,4 +390,4 @@ class WujieMcpServer {
 }
 
 // 启动服务
-new WujieMcpServer().run().catch(console.error);
+new WujieAiMcpServer().run().catch(console.error);
