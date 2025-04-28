@@ -2,7 +2,7 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { ListResourcesRequestSchema, ReadResourceRequestSchema, ListToolsRequestSchema, CallToolRequestSchema, ErrorCode, McpError, TextContent } from "@modelcontextprotocol/sdk/types.js";
-import axios, { formToJSON } from "axios";
+import axios, { formToJSON,AxiosResponse } from "axios";
 import dotenv from "dotenv";
 import { isJsonLike } from "redoc";
 
@@ -34,7 +34,6 @@ interface ArtworkTask {
 class WujieMcpServer {
     server;
     wujieAxios;
-    // taskCache = new Map<string, ArtworkTask>();
 
     constructor() {
         this.server = new Server({
@@ -84,10 +83,15 @@ class WujieMcpServer {
     private createArtworkTool() {
         return {
             name: "create_artwork",
-            description: "创建异步AI作画任务，返回任务ID用于查询进度(生成图片服务)",
+            description: "发起AI作画 (生成图片服务)",
             inputSchema: {
                 type: "object",
                 properties: {
+                    model: {
+                        type: "string",
+                        description: "模型code",
+                        default: 1018
+                    },
                     prompt: {
                         type: "string",
                         description: "作画描述，建议包含风格和细节"
@@ -104,7 +108,7 @@ class WujieMcpServer {
                     },
                     uc_prompt: {
                         type: "string",
-                        description: "可选，作画负面描述，补充不需要在图片里看到的内容"
+                        description: "可选，作画负面描述"
                     }
                 },
                 required: ["prompt"]
@@ -152,40 +156,91 @@ class WujieMcpServer {
         const taskKey = response.data.data?.results?.[0]?.key;
         if (!taskKey) throw new McpError(ErrorCode.InternalError, "创建任务失败，返回任务key为空");
 
-        // // 记录任务状态
-        // this.taskCache.set(taskKey, {
-        //     taskKey,
-        //     status: 'pending',
-        //     createTime: Date.now()
-        // });
-
-        // 返回任务ID
-        return {
-            content: [{
-                type: "text",
-                text: `任务已创建！使用此key查询进度：${taskKey}`
-            }]
-        };
+        let taskData;
+        const expectedSeconds = response.data.data.results[0].expected_second || 20;
+        
+        try {
+            // 轮询任务状态
+            const taskData = await this.pollTaskStatus(taskKey, expectedSeconds * 1500);
+            
+            // 返回生成结果
+            return {
+                content: [{
+                    type: "text",
+                    text: `✅ 生成完成！\n 作画任务key：${taskKey}\n [展示图片] ${taskData.picture_url} \n 消耗积分：${taskData.integral_cost}`
+                }]
+            }
+        } catch (error) {
+            if (error instanceof McpError) throw error;
+            throw new McpError(ErrorCode.InternalError, `生成过程异常`);
+        }
     }
 
+     /**
+     * 轮询查询任务状态
+     * 
+     * @param taskKey - 任务唯一标识
+     * @param timeout - 超时时间（毫秒）
+     * @returns 完成的任务数据
+     */
+     private async pollTaskStatus(taskKey: string, timeout: number): Promise<any> {
+        const startTime = Date.now();
+        let taskData;
+
+        while (Date.now() - startTime < timeout) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            
+            // 发送查询请求
+            const result = await this.doQueryArtwork(taskKey);
+
+            taskData = result.data.data;
+
+            // 成功状态处理
+            if (taskData.status === 4) return taskData;
+            
+            // 积分不足
+            if (taskData.integral_cost === 0) return taskData.integral_cost_message;
+
+            // 失败状态处理
+            if ([3, 12, -1].includes(taskData.status)) {
+                throw new McpError(ErrorCode.InternalError,
+                    `生成失败: ${taskData.failMessage?.failMessage || "未知错误"}`);
+            }
+        }
+
+        // 超时处理
+        throw new McpError(ErrorCode.RequestTimeout, 
+            `任务超时（${Math.round(timeout/1000)}秒），请稍后重试`);
+    }
+
+
+    private doQueryArtwork(taskKey: string) : Promise<AxiosResponse>{
+
+        return this.wujieAxios.get(`${WUJIE_API_CONFIG.ENDPOINTS.QUERY_TASK}?key=${taskKey}`)
+        .then(queryResponse => {
+          if (queryResponse.data.code !== "200") {
+            throw new McpError(
+              ErrorCode.InternalError,
+              `查询作画结果失败：${JSON.stringify(queryResponse.data)}`
+            );
+          }
+          return queryResponse;
+        })
+        .catch(error => {
+          throw error; 
+        });
+    }
 
     // 处理查询请求
     private async handleQueryArtwork(request: any) {
         const argument = request.params.arguments;
-        
-        console.log("argument=" + argument)
 
         if (argument === undefined) {
             throw new McpError(ErrorCode.InvalidParams, "查询参数key不能为空"+JSON.stringify(argument));
         }
 
-        // 调用无界查询接口
-        const response = await this.wujieAxios.get(WUJIE_API_CONFIG.ENDPOINTS.QUERY_TASK + "?key=" + argument.key);
-
-        const code = response.data.code
-        if (code != 200) {
-            throw new McpError(ErrorCode.InternalError, "查询作画结果失败：" + response.data.message);
-        }
+        // 调用查询接口
+        const response = await this.doQueryArtwork(argument.key);
 
         const taskData = response.data.data;
         
