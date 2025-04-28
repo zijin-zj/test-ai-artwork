@@ -1,43 +1,39 @@
 {
-    "name": "omgflux-mcp-server",
-    "version": "0.1.0",
-    "description": "A Model Context Protocol server with OhMyGPT Flux that generates images.",
-    "type": "module",
-    "repository": {
-      "type": "git",
-      "url": "git+https://github.com/exa-labs/omgflux-mcp-server.git"
-    },
-    "bin": {
-      "omgflux-mcp-server": "./build/index.js"
-    },
-    "files": [
+  "name": "wujieai-mcp-server",
+  "version": "0.1.0",
+  "description": "由无界AI开放平台提供的AI生图 MCP 服务。A mcp server to generate images with Wujieai open APIs.",
+  "type": "module",
+  "bin": {
+      "wujieai-mcp-server": "./build/index.js"
+  },
+  "files": [
       "build"
-    ],
-    "keywords": [
+  ],
+  "keywords": [
+      "generate image",
+      "wujieai",
       "mcp",
-      "exa",
-      "search",
+      "modelcontextprotocol",
       "claude",
-      "ai"
-    ],
-    "author": "Exa Labs",
-    "scripts": {
+      "cline"
+  ],
+  "scripts": {
       "build": "tsc && node -e \"require('fs').chmodSync('build/index.js', '755')\"",
       "prepare": "npm run build",
       "watch": "tsc --watch",
-      "inspector": "npx @modelcontextprotocol/inspector build/index.js",
-      "prepublishOnly": "npm run build"
-    },
-    "dependencies": {
+      "inspector": "npx @modelcontextprotocol/inspector build/index.js"
+  },
+  "dependencies": {
       "@modelcontextprotocol/sdk": "^1.0.3",
       "axios": "^1.7.8",
-      "dotenv": "^16.4.5"
-    },
-    "devDependencies": {
+      "dotenv": "^16.4.5",
+      "ts-node": "^10.9.2"
+  },
+  "devDependencies": {
       "@types/node": "^20.17.24",
       "typescript": "^5.3.3"
-    },
-    "engines": {
+  },
+  "engines": {
       "node": ">=18.0.0"
-    }
   }
+}

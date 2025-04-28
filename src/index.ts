@@ -8,6 +8,15 @@ import { isJsonLike } from "redoc";
 
 dotenv.config();
 
+function getApiKey() {
+    const apiKey = process.env.WUJIEAI_API_KEY;
+    if (!apiKey) {
+        console.error("WUJIEAI_API_KEY environment variable is not set");
+        process.exit(1);
+    }
+    return apiKey;
+}
+
 // 无界AI配置
 const WUJIE_API_CONFIG = {
     BASE_URL: 'https://pref-gate.wujieai.com',
@@ -15,7 +24,7 @@ const WUJIE_API_CONFIG = {
         CREATE_TASK: '/wj-open/v2/ai/create',
         QUERY_TASK: '/wj-open/v2/ai/info'
     },
-    API_KEY: process.env.WUJIE_API_KEY,
+    API_KEY: getApiKey(),
     DEFAULT_PARAMS: {
         model: 1013,            // 默认通用FLUX模型
         num: 1,                 // 生成数量
@@ -92,16 +101,18 @@ class WujieMcpServer {
                     width: {
                         type: "number",
                         enum: [512, 768, 1024, 1360, 2048],
-                        default: 512
+                        default: 512,
+                        description: "图片宽，默认512。（可选）",
                     },
                     height: {
                         type: "number",
                         enum: [512, 768, 1024, 1360, 2048],
-                        default: 512
+                        default: 512,
+                        description: "图片高，默认512。（可选）",
                     },
                     uc_prompt: {
                         type: "string",
-                        description: "可选，作画负面描述"
+                        description: "作画负面描述。（可选）"
                     }
                 },
                 required: ["prompt"]
@@ -119,7 +130,7 @@ class WujieMcpServer {
                 properties: {
                     key: {
                         type: "string",
-                        description: "发起作画时返回的任务key"
+                        description: "发起作画返回的任务key"
                     }
                 },
                 required: ["key"]
@@ -142,12 +153,12 @@ class WujieMcpServer {
 
         const code = response.data.code
         if (code != 200) {
-            throw new McpError(ErrorCode.InternalError, "创建任务失败：" + response.data.message);
+            throw new McpError(ErrorCode.InternalError, "发起作画失败：" + response.data.message);
         }
         
         // 解析响应
         const taskKey = response.data.data?.results?.[0]?.key;
-        if (!taskKey) throw new McpError(ErrorCode.InternalError, "创建任务失败，返回任务key为空");
+        if (!taskKey) throw new McpError(ErrorCode.InternalError, "发起作画失败，返回任务key为空");
 
         let taskData;
         const expectedSeconds = response.data.data.results[0].expected_second || 20;
@@ -160,12 +171,12 @@ class WujieMcpServer {
             return {
                 content: [{
                     type: "text",
-                    text: `✅ 生成完成！\n 作画任务key：${taskKey}\n [展示图片] ${taskData.picture_url} \n 消耗积分：${taskData.integral_cost} \n taskData：${JSON.stringify(taskData)}`
+                    text: `✅ 生成完成！\n 作画任务key：${taskKey}\n [展示图片] ${taskData.picture_url} \n 消耗积分：${taskData.integral_cost}`
                 }]
             }
         } catch (error) {
             if (error instanceof McpError) throw error;
-            throw new McpError(ErrorCode.InternalError, `生成过程异常`);
+            throw new McpError(ErrorCode.InternalError, `发起作画异常`);
         }
     }
 
@@ -194,7 +205,7 @@ class WujieMcpServer {
             // 积分不足
             if (taskData.integral_cost === 0) 
                 throw new McpError(ErrorCode.InternalError,
-                    `生成失败: ${taskData.integral_cost_message} ${JSON.stringify(taskData)}`);
+                    `生成失败: ${taskData.integral_cost_message}`);
 
             // 失败状态处理
             if ([3, 12, -1].includes(taskData.status)) {
@@ -205,23 +216,23 @@ class WujieMcpServer {
 
         // 超时处理
         throw new McpError(ErrorCode.RequestTimeout, 
-            `任务超时（${Math.round(timeout/1000)}秒），请稍后重试`);
+            `作画任务key：${taskKey}, 轮询超时（${Math.round(timeout/1000)}秒），请稍后重试`);
     }
 
 
     private doQueryArtwork(taskKey: string) : Promise<AxiosResponse>{
         return this.wujieAxios.get(`${WUJIE_API_CONFIG.ENDPOINTS.QUERY_TASK}?key=${taskKey}`)
             .then(queryResponse => {
-            if (queryResponse.data.code !== "200") {
-                throw new McpError(
-                ErrorCode.InternalError,
-                `查询作画结果失败：${JSON.stringify(queryResponse.data)}`
-                );
-            }
-            return queryResponse;
+                if (queryResponse.data.code !== "200") {
+                    throw new McpError(
+                    ErrorCode.InternalError,
+                    `查询作画结果失败：${JSON.stringify(queryResponse.data)}`
+                    );
+                }
+                return queryResponse;
             })
             .catch(error => {
-            throw error; 
+                throw error; 
             });
     }
 
@@ -230,7 +241,7 @@ class WujieMcpServer {
         const argument = request.params.arguments;
 
         if (argument === undefined) {
-            throw new McpError(ErrorCode.InvalidParams, "查询参数key不能为空"+JSON.stringify(argument));
+            throw new McpError(ErrorCode.InvalidParams, "查询任务key不能为空");
         }
 
         // 调用查询接口
@@ -265,7 +276,7 @@ class WujieMcpServer {
         return {
             content: [{
                 type: "text",
-                text: `任务状态：${statusMessage}\n消耗积分：${taskData.integral_cost}`
+                text: `作画任务状态：${statusMessage}\n消耗积分：${taskData.integral_cost}`
             }]
         };
     }
