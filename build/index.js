@@ -28,7 +28,7 @@ class WujieMcpServer {
             version: "1.0.0"
         }, {
             capabilities: {
-                tools: {} // 只保留工具能力
+                tools: {}
             }
         });
         this.wujieAxios = axios.create({
@@ -101,13 +101,13 @@ class WujieMcpServer {
     queryArtworkTool() {
         return {
             name: "query_artwork",
-            description: "查询作画任务进度及结果",
+            description: "查询作画任务结果",
             inputSchema: {
                 type: "object",
                 properties: {
                     key: {
                         type: "string",
-                        description: "创建任务时返回的任务ID"
+                        description: "发起作画时返回的任务key"
                     }
                 },
                 required: ["key"]
@@ -163,7 +163,7 @@ class WujieMcpServer {
         const startTime = Date.now();
         let taskData;
         while (Date.now() - startTime < timeout) {
-            await new Promise(resolve => setTimeout(resolve, 1000));
+            await new Promise(resolve => setTimeout(resolve, 2000));
             // 发送查询请求
             const result = await this.doQueryArtwork(taskKey);
             taskData = result.data.data;
@@ -172,7 +172,7 @@ class WujieMcpServer {
                 return taskData;
             // 积分不足
             if (taskData.integral_cost === 0)
-                throw new McpError(ErrorCode.InternalError, `生成失败: ${taskData.integral_cost_message}`);
+                throw new McpError(ErrorCode.InternalError, `生成失败: ${taskData.integral_cost_message} ${JSON.stringify(taskData)}`);
             // 失败状态处理
             if ([3, 12, -1].includes(taskData.status)) {
                 throw new McpError(ErrorCode.InternalError, `生成失败: ${taskData.failMessage?.failMessage || "未知错误"}`);

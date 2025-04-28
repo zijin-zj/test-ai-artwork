@@ -17,19 +17,12 @@ const WUJIE_API_CONFIG = {
     },
     API_KEY: process.env.WUJIE_API_KEY,
     DEFAULT_PARAMS: {
-        model: 1018,            // 默认模型
+        model: 1013,            // 默认通用FLUX模型
         num: 1,                 // 生成数量
         init_image_url: ""      // 底图URL
     }
 };
 
-// 任务状态缓存（实际生产环境建议使用持久化存储）
-interface ArtworkTask {
-    taskKey: string;
-    status: 'pending' | 'processing' | 'completed' | 'failed';
-    createTime: number;
-    resultUrl?: string;
-}
 
 class WujieMcpServer {
     server;
@@ -41,7 +34,7 @@ class WujieMcpServer {
             version: "1.0.0"
         }, {
             capabilities: {
-                tools: {}  // 只保留工具能力
+                tools: {}
             }
         });
 
@@ -89,7 +82,7 @@ class WujieMcpServer {
                 properties: {
                     model: {
                         type: "string",
-                        description: "模型code",
+                        description: "模型code，默认通用FLUX模型",
                         default: 1018
                     },
                     prompt: {
@@ -98,12 +91,12 @@ class WujieMcpServer {
                     },
                     width: {
                         type: "number",
-                        enum: [512, 768, 1024],
+                        enum: [512, 768, 1024, 1360, 2048],
                         default: 512
                     },
                     height: {
                         type: "number",
-                        enum: [512, 768, 1024],
+                        enum: [512, 768, 1024, 1360, 2048],
                         default: 512
                     },
                     uc_prompt: {
@@ -120,13 +113,13 @@ class WujieMcpServer {
     private queryArtworkTool() {
         return {
             name: "query_artwork",
-            description: "查询作画任务进度及结果",
+            description: "查询作画任务结果",
             inputSchema: {
                 type: "object",
                 properties: {
                     key: {
                         type: "string",
-                        description: "创建任务时返回的任务ID"
+                        description: "发起作画时返回的任务key"
                     }
                 },
                 required: ["key"]
@@ -188,7 +181,7 @@ class WujieMcpServer {
         let taskData;
 
         while (Date.now() - startTime < timeout) {
-            await new Promise(resolve => setTimeout(resolve, 1000));
+            await new Promise(resolve => setTimeout(resolve, 2000));
             
             // 发送查询请求
             const result = await this.doQueryArtwork(taskKey);
@@ -201,7 +194,7 @@ class WujieMcpServer {
             // 积分不足
             if (taskData.integral_cost === 0) 
                 throw new McpError(ErrorCode.InternalError,
-                    `生成失败: ${taskData.integral_cost_message}`);
+                    `生成失败: ${taskData.integral_cost_message} ${JSON.stringify(taskData)}`);
 
             // 失败状态处理
             if ([3, 12, -1].includes(taskData.status)) {
@@ -217,20 +210,19 @@ class WujieMcpServer {
 
 
     private doQueryArtwork(taskKey: string) : Promise<AxiosResponse>{
-
         return this.wujieAxios.get(`${WUJIE_API_CONFIG.ENDPOINTS.QUERY_TASK}?key=${taskKey}`)
-        .then(queryResponse => {
-          if (queryResponse.data.code !== "200") {
-            throw new McpError(
-              ErrorCode.InternalError,
-              `查询作画结果失败：${JSON.stringify(queryResponse.data)}`
-            );
-          }
-          return queryResponse;
-        })
-        .catch(error => {
-          throw error; 
-        });
+            .then(queryResponse => {
+            if (queryResponse.data.code !== "200") {
+                throw new McpError(
+                ErrorCode.InternalError,
+                `查询作画结果失败：${JSON.stringify(queryResponse.data)}`
+                );
+            }
+            return queryResponse;
+            })
+            .catch(error => {
+            throw error; 
+            });
     }
 
     // 处理查询请求
