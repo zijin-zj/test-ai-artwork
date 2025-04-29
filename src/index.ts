@@ -39,7 +39,7 @@ const WUJIEAI_API_CONFIG = {
         sampler_index: 0,           // 采样模式（Sampler）是指扩散去噪算法的采样模式，如果设置正确，它们会发散并最终收敛。
         seed: -1                    // 随机种子，生成图片的seed，默认-1随机生成。
     },
-    POLL_TIMEOUT: 60000 
+    POLL_TIMEOUT: 30000 
 };
 
 
