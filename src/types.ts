@@ -63,14 +63,9 @@ export interface FailMessage {
     fail_message: string
 }
 
-
-export interface ModelListResponse {
-    data: ModelInfo[];
-}
-
 export interface ModelInfo {
     // 模型code
-    model_code: string;
+    model_code: number;
     // 模型描述
     model_desc: string;
 }

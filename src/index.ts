@@ -4,7 +4,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { ListToolsRequestSchema, CallToolRequestSchema, ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import axios, { AxiosResponse } from "axios";
 import dotenv from "dotenv";
-import { ApiResponse, GenerateImageResult, GenerateTaskInfo, ModelListResponse, ModelInfo } from "./types.js";
+import { ApiResponse, GenerateImageResult, GenerateTaskInfo, ModelInfo } from "./types.js";
 
 dotenv.config();
 
@@ -38,7 +38,8 @@ const WUJIEAI_API_CONFIG = {
         cfg: 7,                     // 提示词相关性（CFG scale），取值范围[1-30]，默认值7。
         sampler_index: 0,           // 采样模式（Sampler）是指扩散去噪算法的采样模式，如果设置正确，它们会发散并最终收敛。
         seed: -1                    // 随机种子，生成图片的seed，默认-1随机生成。
-    }
+    },
+    POLL_TIMEOUT: 60000 
 };
 
 
@@ -103,7 +104,7 @@ class WujieAiMcpServer {
                     model: {
                         type: "string",
                         description: "模型code，默认通用FLUX模型",
-                        default: 1018
+                        default: 1013
                     },
                     num: {
                         type: "number",
@@ -186,7 +187,7 @@ class WujieAiMcpServer {
     private queryModelInfoListTool() {
         return {
             name: "query_model_infos",
-            description: "查询模型信息列表",
+            description: "查询作画模型信息列表",
             inputSchema: {
                 type: "object",
                 properties: {}
@@ -233,7 +234,7 @@ class WujieAiMcpServer {
             return {
                 content: [{
                     type: "text",
-                    text: `✅ 作画成功！\n 作画任务key：${taskKey}\n 展示图片： ${taskData.picture_url} \n 消耗积分：${taskData.integral_cost}个`
+                    text: `✅ 作画成功！\n 作画任务key：${taskKey}\n 展示图片：${taskData.picture_url} \n 消耗积分：${taskData.integral_cost}个`
                 }]
             }
         } catch (error) {
@@ -253,16 +254,28 @@ class WujieAiMcpServer {
         const startTime = Date.now();
         let taskData;
 
+        let pollTimeout = WUJIEAI_API_CONFIG.POLL_TIMEOUT
+        const sleepTime = 2000;
         while (Date.now() - startTime < timeout) {
-            await new Promise(resolve => setTimeout(resolve, 2000));
-            
+            pollTimeout -= sleepTime;
+            if (pollTimeout < 0) {
+                break;
+            }
+            await new Promise(resolve => setTimeout(resolve, sleepTime));
+           
             // 调用查询作画结果接口
             const result = await this.doQueryGenerateTask(taskKey) as AxiosResponse<ApiResponse<GenerateTaskInfo>>;
-
             taskData = result.data.data;
 
             // 成功状态处理
-            if (taskData.status === 4) return taskData;
+            if (taskData.status === 4) {
+                if (taskData.involve_yellow === 0) {
+                    return taskData;
+                } else {
+                    throw new McpError(ErrorCode.InternalError,
+                        `生成图片涉嫌违规，请优化描述词后重试`);
+                }
+            }
             
             // 积分不足
             if (taskData.integral_cost === 0) 
@@ -276,9 +289,8 @@ class WujieAiMcpServer {
             }
         }
 
-        // 超时处理
         throw new McpError(ErrorCode.RequestTimeout, 
-            `作画任务key：${taskKey}, 轮询超时（${Math.round(timeout/1000)}秒），请稍后重试`);
+            `作画任务key：${taskKey}, 轮询结果超时。作画预估等待时间：${Math.round(timeout/1000)}秒，请稍后重试`);
     }
 
 
@@ -311,6 +323,7 @@ class WujieAiMcpServer {
         const taskData = response.data.data;
         
         // 构建状态消息
+        let isShowPictureUrl = false;
         let statusMessage;
         switch (taskData.status) {
             case 0:
@@ -322,7 +335,12 @@ class WujieAiMcpServer {
                 statusMessage = `正在生成中...`;
                 break;
             case 4:
-                statusMessage = `✅ 作画成功！查看图片：${taskData.picture_url}`;
+                if (taskData.involve_yellow === 0) {
+                    statusMessage = `✅ 作画成功！查看图片：${taskData.picture_url}`;
+                    isShowPictureUrl = true;
+                } else {
+                    statusMessage = `生成图片涉嫌违规，请优化描述词后重试`;
+                }
                 break;
             case -1:
                 statusMessage = `作画提交已撤销`;
@@ -343,17 +361,24 @@ class WujieAiMcpServer {
     }
 
     private async handleQueryModelInfos(request: any) {
-        const response = await this.doQueryModelInfos(request) as AxiosResponse<ApiResponse<ModelListResponse>>;;
+        const response = await this.doQueryModelInfos(request) as AxiosResponse<ApiResponse<ModelInfo[]>>;;
         const code = response.data.code
         if (code != 200) {
             throw new McpError(ErrorCode.InternalError, "查询模型列表失败：" + response.data.message);
-        }
+        }      
+
         return {
-            content: response.data.data.data.map((model: ModelInfo) => ({
-                model_code: model.model_code,
-                model_desc: model.model_desc
-            }))
-        }
+            content: [
+                {
+                    type: "text",
+                    text: "| 模型code | 模型名称          |\n|----------|------------------|"
+                },
+                ...response.data.data.map((model: ModelInfo) => ({
+                type: "text",
+                text: `| ${model.model_code.toString().padEnd(8)} | ${model.model_desc.padEnd(16)} |`
+                }))
+            ]
+          };
     }
 
     private async doQueryModelInfos(request: any): Promise<AxiosResponse>{
