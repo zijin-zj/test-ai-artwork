@@ -33,13 +33,12 @@ const WUJIEAI_API_CONFIG = {
         height: 512,                // 图片高
         uc_prompt: "",              // 负面描述词
         init_image_url: "",         // 底图url
-        super_size_multiple: 1.0,   // 图片超分倍数，默认不超分，可传小数，取值范围为[1-4]。
         steps: 20,                  // 采样步数（sampling steps），默认20
         cfg: 7,                     // 提示词相关性（CFG scale），取值范围[1-30]，默认值7。
         sampler_index: 0,           // 采样模式（Sampler）是指扩散去噪算法的采样模式，如果设置正确，它们会发散并最终收敛。
         seed: -1                    // 随机种子，生成图片的seed，默认-1随机生成。
     },
-    POLL_TIMEOUT: 30000 
+    POLL_TIMEOUT: 30000
 };
 
 
@@ -121,13 +120,13 @@ class WujieAiMcpServer {
                     },
                     width: {
                         type: "number",
-                        enum: [512, 768, 1024, 1360, 2048],
+                        enum: [512, 768, 1024, 1360],
                         default: 512,
                         description: "图片宽，默认512。（可选）",
                     },
                     height: {
                         type: "number",
-                        enum: [512, 768, 1024, 1360, 2048],
+                        enum: [512, 768, 1024, 1360],
                         default: 512,
                         description: "图片高，默认512。（可选）",
                     },
@@ -135,11 +134,6 @@ class WujieAiMcpServer {
                         type: "string",
                         default: "",
                         description: "底图url。（可选）"
-                    },
-                    super_size_multiple: {
-                        type: "number",
-                        default: 1.0,
-                        description: "图片超分倍数，默认不超分。（可选）"
                     },
                     steps: {
                         type: "number",
@@ -209,7 +203,6 @@ class WujieAiMcpServer {
             width: params.width || defaultParams.width,
             height: params.height || defaultParams.height,
             init_image_url: params.init_image_url || defaultParams.init_image_url,
-            super_size_multiple: params.super_size_multiple || defaultParams.super_size_multiple,
             steps: params.steps || defaultParams.steps,
             sampler_index: params.sampler_index || defaultParams.sampler_index,
             seed: params.seed || defaultParams.seed
